@@ -9,6 +9,27 @@ const cors = require("cors");
 require("dotenv").config();
 
 const app = express();
+
+/* ===========================
+   ✅ CORS FIX (IMPORTANT)
+=========================== */
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://expense-management-system-6-c616.onrender.com" // 👈 YOUR FRONTEND URL
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("❌ Not allowed by CORS"));
+    }
+  },
+  credentials: true
+}));
+
 app.use(express.json());
 
 /* ===========================
@@ -193,7 +214,7 @@ app.get("/api/expenses/total", authMiddleware, async (req, res) => {
 /* ===========================
    SERVER START
 =========================== */
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
