@@ -1,6 +1,6 @@
 const dns = require('dns');
-// Google DNS set karna taaki Atlas connection mein issue na aaye
 dns.setServers(['8.8.8.8', '8.8.4.4']);
+
 const express = require("express");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
@@ -11,12 +11,11 @@ require("dotenv").config();
 const app = express();
 
 /* ===========================
-   ✅ CORS FIX (IMPORTANT)
+   CORS
 =========================== */
 const allowedOrigins = [
   "http://localhost:5173",
-  "http://localhost:3000",
-  "https://expense-1-oys1.onrender.com" // 👈 YOUR FRONTEND URL
+  "http://localhost:3000"
 ];
 
 app.use(cors({
@@ -24,7 +23,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error("❌ Not allowed by CORS"));
+      callback(new Error("CORS blocked"));
     }
   },
   credentials: true
@@ -33,110 +32,122 @@ app.use(cors({
 app.use(express.json());
 
 /* ===========================
-   MongoDB Connection
+   MongoDB
 =========================== */
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB Connected"))
   .catch(err => console.error("❌ MongoDB Error:", err));
 
 /* ===========================
-   User Schema
+   USER SCHEMA
 =========================== */
 const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
+  email: { type: String, unique: true, required: true },
   password: { type: String, required: true }
 }, { timestamps: true });
 
 const User = mongoose.model("User", userSchema);
 
 /* ===========================
-   Expense Schema
+   ITEM SCHEMA
 =========================== */
-const expenseSchema = new mongoose.Schema({
+const itemSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
     required: true
   },
-  title: { type: String, required: true },
-  amount: { type: Number, required: true },
-  category: {
+  itemName: { type: String, required: true },
+  description: String,
+  type: {
     type: String,
-    enum: ["Food", "Travel", "Bills", "Shopping", "Entertainment", "Health", "Others"],
-    default: "Others"
+    enum: ["Lost", "Found"],
+    required: true
   },
-  date: { type: Date, default: Date.now }
+  location: String,
+  date: { type: Date, default: Date.now },
+  contactInfo: String
 }, { timestamps: true });
 
-const Expense = mongoose.model("Expense", expenseSchema);
+const Item = mongoose.model("Item", itemSchema);
 
 /* ===========================
-   Auth Middleware
+   AUTH MIDDLEWARE
 =========================== */
 const authMiddleware = (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
 
     if (!token) {
+      console.log("❌ No Token");
       return res.status(401).json({ message: "No token provided" });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
+
     next();
   } catch (err) {
-    return res.status(401).json({ message: "Invalid or expired token" });
+    console.error("❌ Auth Error:", err.message);
+    return res.status(401).json({ message: "Invalid token" });
   }
 };
 
 /* ===========================
-   Routes
+   AUTH ROUTES
 =========================== */
 
-// 🔹 REGISTER
+// REGISTER
 app.post("/api/register", async (req, res) => {
   try {
+    console.log("📩 Register Body:", req.body);
+
     const { name, email, password } = req.body;
 
     if (!name || !email || !password) {
-      return res.status(400).json({ message: "All fields are required" });
+      return res.status(400).json({ message: "All fields required" });
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
+    const exist = await User.findOne({ email });
+    if (exist) {
       return res.status(400).json({ message: "Email already exists" });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, 10);
 
-    const user = new User({ name, email, password: hashedPassword });
-    await user.save();
+    const user = await User.create({
+      name,
+      email,
+      password: hash
+    });
 
     res.status(201).json({
-      message: "User registered successfully",
+      message: "Registered successfully",
       userId: user._id
     });
 
-  } catch (error) {
-    console.error("❌ Register Error:", error);
-    res.status(500).json({ message: "Server error" });
+  } catch (err) {
+    console.error("❌ Register Error:", err);
+    res.status(500).json({ message: err.message });
   }
 });
 
-// 🔹 LOGIN
+// LOGIN
 app.post("/api/login", async (req, res) => {
   try {
+    console.log("📩 Login Body:", req.body);
+
     const { email, password } = req.body;
 
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(400).json({ message: "Invalid email or password" });
+      return res.status(400).json({ message: "Invalid email/password" });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: "Invalid email or password" });
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(400).json({ message: "Invalid email/password" });
     }
 
     const token = jwt.sign(
@@ -146,76 +157,107 @@ app.post("/api/login", async (req, res) => {
     );
 
     res.json({
-      message: "Login successful",
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email
-      }
+      message: "Login success",
+      token
     });
 
-  } catch (error) {
-    console.error("❌ Login Error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 🔹 ADD EXPENSE
-app.post("/api/expense", authMiddleware, async (req, res) => {
-  try {
-    const { title, amount, category, date } = req.body;
-
-    const expense = new Expense({
-      userId: req.user.id,
-      title,
-      amount,
-      category,
-      date: date || Date.now()
-    });
-
-    await expense.save();
-
-    res.status(201).json({ message: "Expense added", expense });
-
-  } catch (error) {
-    console.error("❌ Add Expense Error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 🔹 GET EXPENSES
-app.get("/api/expenses", authMiddleware, async (req, res) => {
-  try {
-    const expenses = await Expense.find({ userId: req.user.id }).sort({ date: -1 });
-    res.json(expenses);
-  } catch (error) {
-    console.error("❌ Fetch Expenses Error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// 🔹 TOTAL EXPENSE
-app.get("/api/expenses/total", authMiddleware, async (req, res) => {
-  try {
-    const total = await Expense.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(req.user.id) } },
-      { $group: { _id: null, total: { $sum: "$amount" } } }
-    ]);
-
-    res.json({ total: total[0]?.total || 0 });
-
-  } catch (error) {
-    console.error("❌ Total Error:", error);
-    res.status(500).json({ message: "Server error" });
+  } catch (err) {
+    console.error("❌ Login Error:", err);
+    res.status(500).json({ message: err.message });
   }
 });
 
 /* ===========================
-   SERVER START
+   ITEM ROUTES
 =========================== */
-const PORT = process.env.PORT || 5000;
+
+// ADD ITEM
+app.post("/api/items", authMiddleware, async (req, res) => {
+  try {
+    console.log("📩 Add Item Body:", req.body);
+
+    const item = await Item.create({
+      userId: req.user.id,
+      ...req.body
+    });
+
+    res.status(201).json(item);
+
+  } catch (err) {
+    console.error("❌ Add Item Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET ALL ITEMS
+app.get("/api/items", async (req, res) => {
+  try {
+    const items = await Item.find().sort({ date: -1 });
+    res.json(items);
+  } catch (err) {
+    console.error("❌ Get Items Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET ITEM BY ID
+app.get("/api/items/:id", async (req, res) => {
+  try {
+    const item = await Item.findById(req.params.id);
+    res.json(item);
+  } catch (err) {
+    console.error("❌ Get Item Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// UPDATE ITEM
+app.put("/api/items/:id", authMiddleware, async (req, res) => {
+  try {
+    const item = await Item.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+    res.json(item);
+  } catch (err) {
+    console.error("❌ Update Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// DELETE ITEM
+app.delete("/api/items/:id", authMiddleware, async (req, res) => {
+  try {
+    await Item.findByIdAndDelete(req.params.id);
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    console.error("❌ Delete Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// SEARCH
+app.get("/api/items/search", async (req, res) => {
+  try {
+    const { name } = req.query;
+
+    const items = await Item.find({
+      itemName: { $regex: name, $options: "i" }
+    });
+
+    res.json(items);
+  } catch (err) {
+    console.error("❌ Search Error:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+/* ===========================
+   SERVER
+=========================== */
+const PORT = process.env.PORT || 2000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log("🚀 Server running on " + PORT);
 });
